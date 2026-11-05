@@ -104,9 +104,16 @@ else
   ok "Installed"
 fi
 
-# Add nvm config to ~/.zshrc if not already present
+# Make nvm available in new zsh sessions. Text mentioning NVM_DIR in ~/.zshrc
+# is not proof that nvm loads (an older version of this script wrote a
+# hard-coded /opt/homebrew path, which is wrong on Intel Macs), so ask a fresh
+# interactive zsh. Only append our block when nvm is really missing there; an
+# existing working config is left alone.
+NVM_MARK_BEGIN="# >>> cpos nvm >>>"
+NVM_MARK_END="# <<< cpos nvm <<<"
 NVM_CONFIG=$(cat <<EOF
 
+$NVM_MARK_BEGIN
 export NVM_DIR="\$HOME/.nvm"
 if [ -s "\$NVM_DIR/nvm.sh" ]; then
   \. "\$NVM_DIR/nvm.sh"
@@ -114,11 +121,14 @@ elif [ -s "$BREW_PREFIX/opt/nvm/nvm.sh" ]; then
   \. "$BREW_PREFIX/opt/nvm/nvm.sh"
   [ -s "$BREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm" ] && \. "$BREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm"
 fi
+$NVM_MARK_END
 EOF
 )
 
-if grep -q 'NVM_DIR' "$HOME/.zshrc" 2>/dev/null; then
-  skip "~/.zshrc already configured for nvm"
+if grep -qF "$NVM_MARK_BEGIN" "$HOME/.zshrc" 2>/dev/null; then
+  skip "The CPOS nvm block is already in ~/.zshrc"
+elif zsh -ic 'command -v nvm' </dev/null &>/dev/null; then
+  skip "nvm already loads in new zsh sessions"
 else
   echo "$NVM_CONFIG" >> "$HOME/.zshrc"
   ok "Added nvm config to ~/.zshrc"
