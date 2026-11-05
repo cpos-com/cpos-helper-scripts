@@ -2,7 +2,8 @@
 #
 # CPOS — First-time machine setup
 #
-# Installs all tools required before running the developer onboarding script.
+# Installs all tools required before following the developer onboarding guide
+# (docs/guides/onboarding.md in cpos-hub).
 # Safe to run multiple times — already-installed tools are skipped.
 #
 # Usage:
@@ -77,65 +78,73 @@ fi
 # ── Step 3: nvm ───────────────────────────────────────────────────────────────
 step "3/9  nvm"
 
-if [ -d "$HOME/.nvm" ]; then
-  skip "Already installed (~/.nvm exists)"
+BREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+if [ -z "$BREW_PREFIX" ]; then
+  if [ "$(uname -m)" = "arm64" ]; then BREW_PREFIX="/opt/homebrew"; else BREW_PREFIX="/usr/local"; fi
+fi
+
+export NVM_DIR="$HOME/.nvm"
+mkdir -p "$NVM_DIR"
+
+# nvm can live in ~/.nvm (its install script) or under Homebrew
+find_nvm_sh() {
+  if [ -s "$NVM_DIR/nvm.sh" ]; then
+    echo "$NVM_DIR/nvm.sh"
+  elif [ -s "$BREW_PREFIX/opt/nvm/nvm.sh" ]; then
+    echo "$BREW_PREFIX/opt/nvm/nvm.sh"
+  fi
+}
+
+NVM_SH="$(find_nvm_sh)"
+if [ -n "$NVM_SH" ]; then
+  skip "Already installed ($NVM_SH)"
 else
   brew install nvm || die "Failed to install nvm."
+  NVM_SH="$(find_nvm_sh)"
   ok "Installed"
 fi
 
-# Add nvm config to ~/.zshrc if not already present
-NVM_CONFIG=$(cat <<'EOF'
+# Make nvm available in new zsh sessions. Text mentioning NVM_DIR in ~/.zshrc
+# is not proof that nvm loads (an older version of this script wrote a
+# hard-coded /opt/homebrew path, which is wrong on Intel Macs), so ask a fresh
+# interactive zsh. Only append our block when nvm is really missing there; an
+# existing working config is left alone.
+NVM_MARK_BEGIN="# >>> cpos nvm >>>"
+NVM_MARK_END="# <<< cpos nvm <<<"
+NVM_CONFIG=$(cat <<EOF
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
-[ -s "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/opt/homebrew/opt/nvm/etc/bash_completion.d/nvm"
+$NVM_MARK_BEGIN
+export NVM_DIR="\$HOME/.nvm"
+if [ -s "\$NVM_DIR/nvm.sh" ]; then
+  \. "\$NVM_DIR/nvm.sh"
+elif [ -s "$BREW_PREFIX/opt/nvm/nvm.sh" ]; then
+  \. "$BREW_PREFIX/opt/nvm/nvm.sh"
+  [ -s "$BREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm" ] && \. "$BREW_PREFIX/opt/nvm/etc/bash_completion.d/nvm"
+fi
+$NVM_MARK_END
 EOF
 )
 
-if grep -q 'NVM_DIR' "$HOME/.zshrc" 2>/dev/null; then
-  skip "~/.zshrc already configured for nvm"
+if grep -qF "$NVM_MARK_BEGIN" "$HOME/.zshrc" 2>/dev/null; then
+  skip "The CPOS nvm block is already in ~/.zshrc"
+elif zsh -ic 'command -v nvm' </dev/null &>/dev/null; then
+  skip "nvm already loads in new zsh sessions"
 else
   echo "$NVM_CONFIG" >> "$HOME/.zshrc"
   ok "Added nvm config to ~/.zshrc"
 fi
 
-# Load nvm into the current shell session
-export NVM_DIR="$HOME/.nvm"
-BREW_PREFIX="$(brew --prefix)"
-[ -s "$BREW_PREFIX/opt/nvm/nvm.sh" ] && source "$BREW_PREFIX/opt/nvm/nvm.sh"
+# Load nvm into the current shell session. nvm does not support 'set -u',
+# so nounset is off while nvm runs.
+set +u
+# shellcheck source=/dev/null
+[ -n "$NVM_SH" ] && source "$NVM_SH"
 
-command -v nvm &>/dev/null || die "nvm loaded but 'nvm' command not found. Try opening a new terminal and re-running."
+command -v nvm &>/dev/null || die "nvm not found in ~/.nvm or $BREW_PREFIX/opt/nvm. Try opening a new terminal and re-running."
+set -u
 
-# ── Step 4: Node.js v22 ───────────────────────────────────────────────────────
-step "4/9  Node.js v22"
-
-CURRENT_NODE=$(node --version 2>/dev/null || echo "none")
-NODE_MAJOR=$(echo "$CURRENT_NODE" | sed 's/v//' | cut -d. -f1)
-
-if [ "$NODE_MAJOR" = "22" ]; then
-  skip "Already on $CURRENT_NODE"
-else
-  if [ "$CURRENT_NODE" != "none" ]; then
-    warn "Found $CURRENT_NODE — v22.x required. Installing v22..."
-  fi
-  nvm install 22 || die "Failed to install Node.js v22."
-  nvm use 22
-  ok "$(node --version)"
-fi
-
-# ── Step 5: pnpm ─────────────────────────────────────────────────────────────
-step "5/9  pnpm"
-
-if command -v pnpm &>/dev/null; then
-  skip "Already installed ($(pnpm --version))"
-else
-  corepack enable pnpm || die "Failed to enable pnpm via Corepack."
-  ok "$(pnpm --version)"
-fi
-
-# ── Step 6: AWS CLI v2 ────────────────────────────────────────────────────────
-step "6/9  AWS CLI v2"
+# ── Step 4: AWS CLI v2 ────────────────────────────────────────────────────────
+step "4/9  AWS CLI v2"
 
 AWS_VERSION=$(aws --version 2>&1 || echo "none")
 if echo "$AWS_VERSION" | grep -q 'aws-cli/2'; then
@@ -149,8 +158,8 @@ else
   ok "$(aws --version | cut -d' ' -f1)"
 fi
 
-# ── Step 7: Stripe CLI ────────────────────────────────────────────────────────
-step "7/9  Stripe CLI"
+# ── Step 5: Stripe CLI ────────────────────────────────────────────────────────
+step "5/9  Stripe CLI"
 
 if command -v stripe &>/dev/null; then
   skip "Already installed ($(stripe --version))"
@@ -159,8 +168,8 @@ else
   ok "$(stripe --version)"
 fi
 
-# ── Step 8: GitHub CLI ────────────────────────────────────────────────────────
-step "8/9  GitHub CLI"
+# ── Step 6: GitHub CLI ────────────────────────────────────────────────────────
+step "6/9  GitHub CLI"
 
 if command -v gh &>/dev/null; then
   skip "Already installed ($(gh --version | head -1))"
@@ -179,8 +188,8 @@ else
   ok "Authenticated"
 fi
 
-# ── Step 9: Clone the Repository ──────────────────────────────────────────────
-step "9/9  Clone the Repository"
+# ── Step 7: Clone the Repository ──────────────────────────────────────────────
+step "7/9  Clone the Repository"
 
 DEFAULT_DEST="$HOME/workspace/cpos-hub"
 echo ""
@@ -189,18 +198,62 @@ DEST="${DEST:-$DEFAULT_DEST}"
 
 if [ -d "$DEST/.git" ]; then
   skip "Repo already exists at $DEST"
+  # 'pnpm verify' needs full history to find the merge-base with origin/main
+  if [ "$(git -C "$DEST" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    warn "Clone is shallow. Fetching full history..."
+    if git -C "$DEST" remote set-branches origin '*' && git -C "$DEST" fetch --unshallow; then
+      ok "Fetched full history"
+    else
+      warn "Could not unshallow. Run 'git fetch --unshallow' in $DEST before 'pnpm verify'."
+    fi
+  fi
 else
   mkdir -p "$(dirname "$DEST")"
-  gh repo clone cpos-com/cpos-hub "$DEST" -- --depth=1 || die "Failed to clone repository."
+  gh repo clone cpos-com/cpos-hub "$DEST" || die "Failed to clone repository."
   ok "Cloned to $DEST"
 fi
+
+# ── Step 8: Node.js ───────────────────────────────────────────────────────────
+step "8/9  Node.js"
+
+FALLBACK_NODE="22"
+if [ -s "$DEST/.nvmrc" ]; then
+  NODE_WANT="$(head -n 1 "$DEST/.nvmrc" | tr -d '[:space:]')"
+  NODE_SOURCE="$DEST/.nvmrc"
+else
+  NODE_WANT="$FALLBACK_NODE"
+  NODE_SOURCE="fallback, no .nvmrc found"
+  warn "No .nvmrc in $DEST — using Node $FALLBACK_NODE"
+fi
+
+set +u
+if [ "$(nvm version "$NODE_WANT")" != "N/A" ]; then
+  nvm use "$NODE_WANT" >/dev/null || die "Failed to switch to Node $NODE_WANT."
+  skip "Already installed ($(node --version), from $NODE_SOURCE)"
+else
+  nvm install "$NODE_WANT" || die "Failed to install Node $NODE_WANT."
+  nvm use "$NODE_WANT" >/dev/null || die "Failed to switch to Node $NODE_WANT."
+  ok "$(node --version) (from $NODE_SOURCE)"
+fi
+set -u
+
+# ── Step 9: pnpm ──────────────────────────────────────────────────────────────
+step "9/9  pnpm"
+
+# Always enable, even if some pnpm is already on PATH: it is idempotent, and the
+# Corepack shim next to nvm's node runs the version pinned in package.json
+command -v corepack &>/dev/null || die "corepack not found for Node $(node --version). Install pnpm per the onboarding guide."
+corepack enable pnpm || die "Failed to enable pnpm via Corepack."
+PNPM_VERSION="$(cd "$DEST" && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version 2>/dev/null)" \
+  || die "pnpm did not run in $DEST. Check 'corepack enable pnpm' and the repo's packageManager field."
+ok "pnpm $PNPM_VERSION (pinned by $DEST/package.json)"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}  All done!${RESET}"
 echo ""
-echo "  Next step — run the developer onboarding tool:"
+echo "  Next step — open a new terminal (to load nvm), then continue the"
+echo "  developer onboarding guide from \"Set Up Your Sandbox\":"
 echo ""
-echo -e "    ${DIM}cd $DEST${RESET}"
-echo -e "    ${DIM}node scripts/onboarding/index.js${RESET}"
+echo -e "    ${DIM}$DEST/docs/guides/onboarding.md${RESET}"
 echo ""
